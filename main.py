@@ -1,19 +1,19 @@
-#@title Imports and Notebook Utilities
 import os
-import PIL.Image, PIL.ImageDraw
 import numpy as np
 import matplotlib.pylab as pl
-# from IPython.display import Image, HTML, Markdown, clear_output
 from tqdm import  tnrange, tqdm
 os.environ['FFMPEG_BINARY'] = 'ffmpeg'
 import torch
 import torchvision.models as models
 import torch.nn.functional as F
-torch.set_default_tensor_type('torch.cuda.FloatTensor')
-import gc
-from utils import imread, imshow, VideoWriter, grab_plot, zoom
 
-#@title VGG16 Sliced OT Style Model
+from utils import imread, imshow, VideoWriter, grab_plot, zoom
+from memleak_debug import check_memory_leak_context
+
+
+torch.set_default_tensor_type('torch.cuda.FloatTensor')
+
+# import vgg model
 vgg16 = models.vgg16(weights='IMAGENET1K_V1').features
 
 def calc_styles_vgg(imgs):
@@ -112,7 +112,7 @@ with torch.no_grad():
 ### training loop
 gradient_checkpoints = False  # Set in case of OOM problems
 
-for i in range(2000):
+for i in range(2):
   with torch.no_grad():
     batch_idx = np.random.choice(len(pool), 4, replace=False)
     x = pool[batch_idx]
@@ -160,18 +160,11 @@ with VideoWriter() as vid, torch.no_grad():
     step_n = min(2**(k//30), 8)
     for i in range(step_n):
       x[:] = ca(x)
-    img = to_rgb(x[0]).permute(1, 2, 0).cpu().detach().numpy()
+
+    with check_memory_leak_context():
+        img = to_rgb(x[0]).permute(1, 2, 0).cpu().detach().numpy()
+    print('done')
     vid.add(zoom(img, 2)) # not here
     del img
 
 print('done')
-
-
-# tenslist = []
-# for obj in gc.get_objects():
-#     try:
-#         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-#             tenslist.append(obj)
-#     except:
-#         pass
-# print(len(tenslist))

@@ -122,9 +122,6 @@ class VideoWriter:
 
   def show(self, **kw):
       self.close()
-      fn = self.params['filename']
-      print("TO IMPLEMENT: SHOW DISPLAY")
-    #   display(mvp.ipython_display(fn, **kw))
 
 
 class LoopWriter(VideoWriter):
