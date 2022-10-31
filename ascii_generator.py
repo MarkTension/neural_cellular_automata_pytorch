@@ -1,7 +1,9 @@
 import sys, random, argparse
 import numpy as np
 import math
- 
+from PIL import Image
+from PIL import ImageFont
+from PIL import ImageDraw 
 from PIL import Image
  
 # gray scale level values from:
@@ -12,31 +14,39 @@ gscale1 = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,\"^`'
  
 # 10 levels of gray
 gscale2 = '@%#*+=-:. '
+
+
+def chars_to_nums(img:np.array):
+  chars = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,\"^`'. "  
+  chardict = {}
+  for v,k in enumerate(chars):
+    chardict[k] = v
+
+  return np.vectorize(chardict.get)(img)
+
+
+def ascii_to_num(img):
+  for i in range(len(img)):
+    img[i] = list(img[i])
+  img = np.array(img)
+  style_img = np.expand_dims(img, -1)
+  # convert ascii back to number
+  style_img = chars_to_nums(style_img)
+  return style_img
+
+
+class Config:
+    imgFile = "texture.jpeg"
+    outFile = "tex_ascii.png"
+    scale = 1
+    cols = 80
+    moreLevels = True
  
-def getAverageL(image):
- 
-    """
-    Given PIL Image, return average value of grayscale value
-    """
-    # get image as numpy array
-    im = np.array(image)
- 
-    # get shape
-    w,h = im.shape
- 
-    # get average
-    return np.average(im.reshape(w*h))
- 
-def covertImageToAscii(fileName, cols, scale, moreLevels):
+
+def image_to_ascii(image, cols=80, scale=1)->list:
     """
     Given Image and dims (rows, cols) returns an m*n list of Images
-    """
-    # declare globals
-    global gscale1, gscale2
- 
-    # open image and convert to grayscale
-    image = Image.open(fileName).convert('L')
- 
+    """ 
     # store dimensions
     W, H = image.size[0], image.size[1]
     print("input image dims: %d x %d" % (W, H))
@@ -81,19 +91,12 @@ def covertImageToAscii(fileName, cols, scale, moreLevels):
             # correct last tile
             if i == cols-1:
                 x2 = W
- 
             # crop image to extract tile
             img = image.crop((x1, y1, x2, y2))
- 
             # get average luminance
-            avg = int(getAverageL(img))
- 
+            avg = int(np.average(np.array(img)))
             # look up ascii char
-            if moreLevels:
-                gsval = gscale1[int((avg*69)/255)]
-            else:
-                gsval = gscale2[int((avg*9)/255)]
- 
+            gsval = gscale1[int((avg*69)/255)]
             # append ascii char to string
             aimg[j] += gsval
      
@@ -101,48 +104,7 @@ def covertImageToAscii(fileName, cols, scale, moreLevels):
     return aimg
 
 
-def _load_img():
-
-    
-
-# main() function
-def main():
-    # create pa
-    # add expected arguments
-    class config:
-        imgFile = "texture.jpeg"
-        outFile = "tex_ascii.png"
-        scale = 1
-        cols = 80
-        moreLevels = True
- 
-    # parse args
-    imgFile = config.imgFile
- 
-    # set output file
-    outFile = 'out.txt'
-    if config.outFile:
-        outFile = config.outFile
- 
-    # set scale default as 0.43 which suits
-    # a Courier font
-    scale = 1 #0.43
-    if config.scale:
-        scale = float(config.scale)
- 
-    # set cols
-    cols = 80
-    if config.cols:
-        cols = int(config.cols)
- 
-    print('generating ASCII art...')
-    # convert image to ascii txt
-    aimg = covertImageToAscii(imgFile, cols, scale, config.moreLevels)
-    print(aimg)
-   
-    from PIL import Image
-    from PIL import ImageFont
-    from PIL import ImageDraw 
+def draw_ascii(aimg:list, config):
 
     img = Image.new('RGB', (config.cols*9, config.cols*9))
     draw = ImageDraw.Draw(img)
@@ -151,7 +113,20 @@ def main():
     # print(row)
         draw.text(xy=(0, 8 * i), text=row, fill=(255,0,0), spacing=50.3) # ,font=font
     img.show()
-    img.save(outFile)
+    img.save(config.outFile)
+    
+
+def main():
+    # create pa
+    # add expected arguments
+  
+    image = Image.open(Config.imgFile).convert('L')
+    print('generating ASCII art...')     
+    aimg = image_to_ascii(image, Config.cols, Config.scale)
+    
+    print(aimg)   
+
+    draw_ascii(aimg, Config)
  
 # call main
 if __name__ == '__main__':

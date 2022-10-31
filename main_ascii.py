@@ -6,16 +6,17 @@ os.environ['FFMPEG_BINARY'] = 'ffmpeg'
 import torch
 import torchvision.models as models
 import torch.nn.functional as F
-
 from utils import imread, imshow, VideoWriter, grab_plot, zoom
 from memleak_debug import check_memory_leak_context
-from ascii_generator import image_to_ascii
+from ascii_generator import image_to_ascii, draw_ascii, Config, ascii_to_num
+from PIL import Image
 
-
+# torch.set_default_tensor_type('torch.cuda.FloatTensor')
 torch.set_default_tensor_type('torch.FloatTensor')
 
 # import vgg model
 vgg16 = models.vgg16(weights='IMAGENET1K_V1').features
+
 
 def calc_styles_vgg(imgs):
   style_layers = [1, 6, 11, 18, 25]  
@@ -72,7 +73,7 @@ def perception(x):
   return perchannel_conv(x, filters)
 
 class CA(torch.nn.Module):
-  def __init__(self, chn=12, hidden_n=96):
+  def __init__(self, chn=10, hidden_n=96): # removed 2 channels
     super().__init__()
     self.chn = chn
     self.w1 = torch.nn.Conv2d(chn*4, hidden_n, 1)
@@ -89,22 +90,30 @@ class CA(torch.nn.Module):
   def seed(self, n, sz=128):
     return torch.zeros(n, self.chn, sz, sz)
 
-def to_rgb(x):
-  return x[...,:3,:,:]+0.5
+def to_grayscale(x):
+  return x[...,:1, :,:]+0.5
 
 param_n = sum(p.numel() for p in CA().parameters())
 print('CA param count:', param_n)
 
 ### target image
 url = 'https://www.robots.ox.ac.uk/~vgg/data/dtd/thumbs/dotted/dotted_0201.jpg'
-style_img = imread(url, max_size=128)
+# style_img = imread(url, max_size=128)
+
+# format img
+# get our image
+image = Image.open(Config.imgFile).convert('L')
+### make ASCII image
+img = image_to_ascii(image)
+img = ascii_to_num(img)
+
 with torch.no_grad():
-  loss_f = create_vgg_loss(to_nchw(style_img))
-imshow(style_img, count=0)
+  loss_f = create_vgg_loss(to_nchw(img))
+imshow(img, count=0)
 
 ### setup training
 ca = CA() 
-opt = torch.optim.Adam(ca.parameters(), 1e-3, capturable=False)
+opt = torch.optim.Adam(ca.parameters(), 1e-3, capturable=False) # capturable=True
 lr_sched = torch.optim.lr_scheduler.MultiStepLR(opt, [1000, 2000], 0.3)
 loss_log = []
 with torch.no_grad():
@@ -113,7 +122,7 @@ with torch.no_grad():
 ### training loop
 gradient_checkpoints = False  # Set in case of OOM problems
 
-for i in range(100):
+for i in range(2000):
   with torch.no_grad():
     batch_idx = np.random.choice(len(pool), 4, replace=False)
     x = pool[batch_idx]
@@ -128,7 +137,7 @@ for i in range(100):
     x = torch.utils.checkpoint.checkpoint_sequential([ca]*step_n, 16, x)
 
   overflow_loss = (x-x.clamp(-1.0, 1.0)).abs().sum()
-  loss = loss_f(to_rgb(x))+overflow_loss
+  loss = loss_f(to_grayscale(x))+overflow_loss
   with torch.no_grad():
     loss.backward()
     for p in ca.parameters():
@@ -151,7 +160,7 @@ for i in range(100):
       pl.ylim(np.min(loss_log), loss_log[0])
       pl.tight_layout()
       imshow(grab_plot(), id='log', count=i)
-      imgs = to_rgb(x).permute([0, 2, 3, 1]).cpu()
+      imgs = to_grayscale(x).permute([0, 2, 3, 1]).cpu()
       imshow(np.hstack(imgs), id='batch', count=i)
 
 
@@ -162,9 +171,9 @@ with VideoWriter() as vid, torch.no_grad():
     for i in range(step_n):
       x[:] = ca(x)
 
-    # with check_memory_leak_context():
-      img = to_rgb(x[0]).permute(1, 2, 0).cpu().detach().numpy()
-    # print('done')
+      # with check_memory_leak_context():
+      img = to_grayscale(x[0]).permute(1, 2, 0).cpu().detach().numpy()
+    print('done')
     vid.add(zoom(img, 2)) # not here
     del img
 
