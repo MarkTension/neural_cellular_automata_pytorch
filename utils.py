@@ -7,11 +7,10 @@ import requests
 import numpy as np
 import matplotlib.pylab as pl
 os.environ['FFMPEG_BINARY'] = 'ffmpeg'
-import moviepy.editor as mvp
+# import moviepy.editor as mvp
 from moviepy.video.io.ffmpeg_writer import FFMPEG_VideoWriter
 import imageio
-
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 def imread(url, max_size=None, mode=None):
   if url.startswith(('http:', 'https:')):
@@ -25,7 +24,7 @@ def imread(url, max_size=None, mode=None):
     f = url
   img = PIL.Image.open(f)
   if max_size is not None:
-    img.thumbnail((max_size, max_size), PIL.Image.ANTIALIAS)
+    img.thumbnail((max_size, max_size), PIL.Image.Resampling.LANCZOS)
   if mode is not None:
     img = img.convert(mode)
   img = np.float32(img)/255.0

@@ -9,17 +9,20 @@ os.environ['FFMPEG_BINARY'] = 'ffmpeg'
 import torch
 import torchvision.models as models
 import torch.nn.functional as F
-torch.set_default_tensor_type('torch.cuda.FloatTensor')
+# torch.set_default_tensor_type('torch.cuda.FloatTensor')
+
 import gc
 from utils import imread, imshow, VideoWriter, grab_plot, zoom
 
 #@title VGG16 Sliced OT Style Model
-vgg16 = models.vgg16(weights='IMAGENET1K_V1').features
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+vgg16 = models.vgg16(weights='IMAGENET1K_V1').features.to(device)
+
 
 def calc_styles_vgg(imgs):
   style_layers = [1, 6, 11, 18, 25]  
-  mean = torch.tensor([0.485, 0.456, 0.406])[:,None,None]
-  std = torch.tensor([0.229, 0.224, 0.225])[:,None,None]
+  mean = torch.tensor([0.485, 0.456, 0.406], device=device)[:,None,None]
+  std = torch.tensor([0.229, 0.224, 0.225], device=device)[:,None,None]
   x = (imgs-mean) / std
   b, c, h, w = x.shape
   features = [x.reshape(b, c, h*w)]
@@ -35,7 +38,7 @@ def project_sort(x, proj):
 
 def ot_loss(source, target, proj_n=32):
   ch, n = source.shape[-2:]
-  projs = F.normalize(torch.randn(ch, proj_n), dim=0)
+  projs = F.normalize(torch.randn(ch, proj_n, device=device), dim=0)
   source_proj = project_sort(source, projs)
   target_proj = project_sort(target, projs)
   target_interp = F.interpolate(target_proj, n, mode='nearest')
@@ -66,8 +69,8 @@ def perchannel_conv(x, filters):
   y = torch.nn.functional.conv2d(y, filters[:,None])
   return y.reshape(b, -1, h, w)
 
+filters = torch.stack([ident, sobel_x, sobel_x.T, lap]).to(device)
 def perception(x):
-  filters = torch.stack([ident, sobel_x, sobel_x.T, lap])
   return perchannel_conv(x, filters)
 
 class CA(torch.nn.Module):
@@ -82,7 +85,7 @@ class CA(torch.nn.Module):
     y = perception(x)
     y = self.w2(torch.relu(self.w1(y)))
     b, c, h, w = y.shape
-    udpate_mask = (torch.rand(b, 1, h, w)+update_rate).floor()
+    udpate_mask = (torch.rand(b, 1, h, w).to(device)+update_rate).floor()
     return x+y*udpate_mask
 
   def seed(self, n, sz=128):
@@ -96,18 +99,19 @@ print('CA param count:', param_n)
 
 ### target image
 url = 'https://www.robots.ox.ac.uk/~vgg/data/dtd/thumbs/dotted/dotted_0201.jpg'
+url = 'https://images.are.na/eyJidWNrZXQiOiJhcmVuYV9pbWFnZXMiLCJrZXkiOiIzMzU2NjQ0OC9vcmlnaW5hbF8wMmE1MTI3YmNiOTJiYjE3OTIxZDlmMjA2MDUyYzgxOS5qcGciLCJlZGl0cyI6eyJyZXNpemUiOnsid2lkdGgiOjEyMDAsImhlaWdodCI6MTIwMCwiZml0IjoiaW5zaWRlIiwid2l0aG91dEVubGFyZ2VtZW50Ijp0cnVlfSwid2VicCI6eyJxdWFsaXR5Ijo4NX0sImZsYXR0ZW4iOnsiYmFja2dyb3VuZCI6eyJyIjoyMDMsImciOjIwMywiYiI6MjAzfX0sImpwZWciOnsicXVhbGl0eSI6ODV9LCJyb3RhdGUiOm51bGx9fQ=='
 style_img = imread(url, max_size=128)
 with torch.no_grad():
-  loss_f = create_vgg_loss(to_nchw(style_img))
+  loss_f = create_vgg_loss(to_nchw(style_img).to(device))
 imshow(style_img, count=0)
 
 ### setup training
-ca = CA() 
-opt = torch.optim.Adam(ca.parameters(), 1e-3, capturable=True)
+ca = CA().to(device)
+opt = torch.optim.Adam(ca.parameters(), 1e-3)
 lr_sched = torch.optim.lr_scheduler.MultiStepLR(opt, [1000, 2000], 0.3)
 loss_log = []
 with torch.no_grad():
-  pool = ca.seed(256)
+  pool = ca.seed(256).to(device)
 
 ### training loop
 gradient_checkpoints = False  # Set in case of OOM problems
