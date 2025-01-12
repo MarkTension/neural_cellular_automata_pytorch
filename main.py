@@ -10,6 +10,15 @@ import torch
 import torchvision.models as models
 import torch.nn.functional as F
 # torch.set_default_tensor_type('torch.cuda.FloatTensor')
+from dataclasses import dataclass
+
+@dataclass
+class Config:
+    hidden_n: int = 96
+    state_dim: int = 12
+    update_rate: float = 0.5
+
+config = Config()
 
 import gc
 from utils import imread, imshow, VideoWriter, grab_plot, zoom
@@ -69,12 +78,12 @@ def perchannel_conv(x, filters):
   y = torch.nn.functional.conv2d(y, filters[:,None])
   return y.reshape(b, -1, h, w)
 
-filters = torch.stack([ident, sobel_x, sobel_x.T, lap]).to(device)
 def perception(x):
+  filters = torch.stack([ident, sobel_x, sobel_x.T, lap]).to(device)
   return perchannel_conv(x, filters)
 
 class CA(torch.nn.Module):
-  def __init__(self, chn=12, hidden_n=96):
+  def __init__(self, chn=16, hidden_n=config.hidden_n):
     super().__init__()
     self.chn = chn
     self.w1 = torch.nn.Conv2d(chn*4, hidden_n, 1)
@@ -99,7 +108,8 @@ print('CA param count:', param_n)
 
 ### target image
 url = 'https://www.robots.ox.ac.uk/~vgg/data/dtd/thumbs/dotted/dotted_0201.jpg'
-url = 'https://images.are.na/eyJidWNrZXQiOiJhcmVuYV9pbWFnZXMiLCJrZXkiOiIzMzU2NjQ0OC9vcmlnaW5hbF8wMmE1MTI3YmNiOTJiYjE3OTIxZDlmMjA2MDUyYzgxOS5qcGciLCJlZGl0cyI6eyJyZXNpemUiOnsid2lkdGgiOjEyMDAsImhlaWdodCI6MTIwMCwiZml0IjoiaW5zaWRlIiwid2l0aG91dEVubGFyZ2VtZW50Ijp0cnVlfSwid2VicCI6eyJxdWFsaXR5Ijo4NX0sImZsYXR0ZW4iOnsiYmFja2dyb3VuZCI6eyJyIjoyMDMsImciOjIwMywiYiI6MjAzfX0sImpwZWciOnsicXVhbGl0eSI6ODV9LCJyb3RhdGUiOm51bGx9fQ=='
+# url = 'computer.webp'
+
 style_img = imread(url, max_size=128)
 with torch.no_grad():
   loss_f = create_vgg_loss(to_nchw(style_img).to(device))
@@ -116,7 +126,7 @@ with torch.no_grad():
 ### training loop
 gradient_checkpoints = False  # Set in case of OOM problems
 
-for i in range(2000):
+for i in range(5000):
   with torch.no_grad():
     batch_idx = np.random.choice(len(pool), 4, replace=False)
     x = pool[batch_idx]
@@ -157,9 +167,20 @@ for i in range(2000):
       imgs = to_rgb(x).permute([0, 2, 3, 1]).cpu()
       imshow(np.hstack(imgs), id='batch', count=i)
 
+    if i % 200 == 0:
+      with VideoWriter() as vid, torch.no_grad():
+        x = ca.seed(1, 256).to(device)
+        for k in tqdm(range(300), leave=False):
+          step_n = min(2**(k//30), 8)
+          for i in range(step_n):
+            x[:] = ca(x)
+          img = to_rgb(x[0]).permute(1, 2, 0).cpu().detach().numpy()
+          vid.add(zoom(img, 2)) # not here
+          del img
+
 
 with VideoWriter() as vid, torch.no_grad():
-  x = ca.seed(1, 256)
+  x = ca.seed(1, 256).to(device)
   for k in tqdm(range(300), leave=False):
     step_n = min(2**(k//30), 8)
     for i in range(step_n):

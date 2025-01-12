@@ -22,6 +22,7 @@ def imread(url, max_size=None, mode=None):
     f = io.BytesIO(r.content)
   else:
     f = url
+  
   img = PIL.Image.open(f)
   if max_size is not None:
     img.thumbnail((max_size, max_size), PIL.Image.Resampling.LANCZOS)
