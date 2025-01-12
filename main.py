@@ -11,27 +11,44 @@ import torchvision.models as models
 import torch.nn.functional as F
 # torch.set_default_tensor_type('torch.cuda.FloatTensor')
 from dataclasses import dataclass
+import matplotlib.pyplot as plt
+from PIL import Image
+import requests
+from io import BytesIO
+from torch import nn
 
-@dataclass
-class Config:
-    hidden_n: int = 96
-    state_dim: int = 12
-    update_rate: float = 0.5
+def imread(url, max_size=None):
+    if url.startswith('http'):
+        response = requests.get(url)
+        img = Image.open(BytesIO(response.content))
+    else:
+        img = Image.open(url)
+    
+    if max_size is not None:
+        ratio = max_size / max(img.size)
+        if ratio < 1:
+            img = img.resize((int(img.size[0] * ratio), int(img.size[1] * ratio)))
+    
+    return np.array(img) / 255.0
 
-config = Config()
+def imshow(img, id=None):
+    plt.figure(figsize=(10, 10))
+    plt.imshow(img)
+    plt.axis('off')
+    plt.show()
 
-import gc
-from utils import imread, imshow, VideoWriter, grab_plot, zoom
+def grab_plot():
+    fig = plt.gcf()
+    return fig
+
 
 #@title VGG16 Sliced OT Style Model
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-vgg16 = models.vgg16(weights='IMAGENET1K_V1').features.to(device)
-
+vgg16 = models.vgg16(weights='IMAGENET1K_V1').features
 
 def calc_styles_vgg(imgs):
-  style_layers = [1, 6, 11, 18, 25]  
-  mean = torch.tensor([0.485, 0.456, 0.406], device=device)[:,None,None]
-  std = torch.tensor([0.229, 0.224, 0.225], device=device)[:,None,None]
+  style_layers = [1, 6, 11, 18, 25]
+  mean = torch.tensor([0.485, 0.456, 0.406])[:,None,None]
+  std = torch.tensor([0.229, 0.224, 0.225])[:,None,None]
   x = (imgs-mean) / std
   b, c, h, w = x.shape
   features = [x.reshape(b, c, h*w)]
@@ -47,7 +64,7 @@ def project_sort(x, proj):
 
 def ot_loss(source, target, proj_n=32):
   ch, n = source.shape[-2:]
-  projs = F.normalize(torch.randn(ch, proj_n, device=device), dim=0)
+  projs = F.normalize(torch.randn(ch, proj_n), dim=0)
   source_proj = project_sort(source, projs)
   target_proj = project_sort(target, projs)
   target_interp = F.interpolate(target_proj, n, mode='nearest')
@@ -66,6 +83,8 @@ def to_nchw(img):
     img = img[None,...]
   return img.permute(0, 3, 1, 2)
 
+
+#@title Minimalistic Neural CA
 ident = torch.tensor([[0.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,0.0]])
 sobel_x = torch.tensor([[-1.0,0.0,1.0],[-2.0,0.0,2.0],[-1.0,0.0,1.0]])
 lap = torch.tensor([[1.0,2.0,1.0],[2.0,-12,2.0],[1.0,2.0,1.0]])
@@ -74,27 +93,27 @@ def perchannel_conv(x, filters):
   '''filters: [filter_n, h, w]'''
   b, ch, h, w = x.shape
   y = x.reshape(b*ch, 1, h, w)
-  y = torch.nn.functional.pad(y, [1, 1, 1, 1], 'circular')
-  y = torch.nn.functional.conv2d(y, filters[:,None])
+  y = F.pad(y, [1, 1, 1, 1], 'circular')
+  y = F.conv2d(y, filters[:,None])
   return y.reshape(b, -1, h, w)
 
 def perception(x):
-  filters = torch.stack([ident, sobel_x, sobel_x.T, lap]).to(device)
+  filters = torch.stack([ident, sobel_x, sobel_x.T, lap])
   return perchannel_conv(x, filters)
 
 class CA(torch.nn.Module):
-  def __init__(self, chn=16, hidden_n=config.hidden_n):
+  def __init__(self, chn=12, hidden_n=96):
     super().__init__()
     self.chn = chn
-    self.w1 = torch.nn.Conv2d(chn*4, hidden_n, 1)
-    self.w2 = torch.nn.Conv2d(hidden_n, chn, 1, bias=False)
+    self.w1 = nn.Conv2d(chn*4, hidden_n, 1)
+    self.w2 = nn.Conv2d(hidden_n, chn, 1, bias=False)
     self.w2.weight.data.zero_()
 
   def forward(self, x, update_rate=0.5):
     y = perception(x)
     y = self.w2(torch.relu(self.w1(y)))
     b, c, h, w = y.shape
-    udpate_mask = (torch.rand(b, 1, h, w).to(device)+update_rate).floor()
+    udpate_mask = (torch.rand(b, 1, h, w)+update_rate).floor()
     return x+y*udpate_mask
 
   def seed(self, n, sz=128):
@@ -106,24 +125,26 @@ def to_rgb(x):
 param_n = sum(p.numel() for p in CA().parameters())
 print('CA param count:', param_n)
 
-### target image
-url = 'https://www.robots.ox.ac.uk/~vgg/data/dtd/thumbs/dotted/dotted_0201.jpg'
-# url = 'computer.webp'
 
+#@title Target image {vertical-output: true}
+url = 'https://www.robots.ox.ac.uk/~vgg/data/dtd/thumbs/dotted/dotted_0201.jpg'
 style_img = imread(url, max_size=128)
 with torch.no_grad():
-  loss_f = create_vgg_loss(to_nchw(style_img).to(device))
-imshow(style_img, count=0)
+  loss_f = create_vgg_loss(to_nchw(style_img))
+imshow(style_img)
 
-### setup training
-ca = CA().to(device)
-opt = torch.optim.Adam(ca.parameters(), 1e-3)
+
+#@title setup training
+ca = CA()
+opt = torch.optim.Adam(ca.parameters(), 1e-3, capturable=True)
 lr_sched = torch.optim.lr_scheduler.MultiStepLR(opt, [1000, 2000], 0.3)
 loss_log = []
 with torch.no_grad():
-  pool = ca.seed(256).to(device)
+  pool = ca.seed(256)
 
-### training loop
+
+#@title training loop {vertical-output: true}
+
 gradient_checkpoints = False  # Set in case of OOM problems
 
 for i in range(5000):
@@ -137,7 +158,7 @@ for i in range(5000):
     for k in range(step_n):
       x = ca(x)
   else:
-    x.requires_grad = True
+    x.requires_grad = True  # https://github.com/pytorch/pytorch/issues/42812
     x = torch.utils.checkpoint.checkpoint_sequential([ca]*step_n, 16, x)
 
   overflow_loss = (x-x.clamp(-1.0, 1.0)).abs().sum()
@@ -145,58 +166,33 @@ for i in range(5000):
   with torch.no_grad():
     loss.backward()
     for p in ca.parameters():
-      p.grad /= (p.grad.norm()+1e-8)   # normalize gradients 
+      p.grad /= (p.grad.norm()+1e-8)   # normalize gradients
     opt.step()
     opt.zero_grad()
     lr_sched.step()
     pool[batch_idx] = x                # update pool
-    
+
     loss_log.append(loss.item())
     if i%5 == 0:
-      print(f" \
-        step_n: {len(loss_log)} \
-        loss: {loss.item()} \
-        lr: {lr_sched.get_last_lr()[0]}")
-
-    if i%100==0:
+      print(f'''
+        step_n: {len(loss_log)}
+        loss: {loss.item()}
+        lr: {lr_sched.get_last_lr()[0]}''')
+    if i%50==0:
       pl.plot(loss_log, '.', alpha=0.1)
       pl.yscale('log')
       pl.ylim(np.min(loss_log), loss_log[0])
       pl.tight_layout()
-      imshow(grab_plot(), id='log', count=i)
+      imshow(grab_plot(), id='log')
       imgs = to_rgb(x).permute([0, 2, 3, 1]).cpu()
-      imshow(np.hstack(imgs), id='batch', count=i)
+      imshow(np.hstack(imgs), id='batch')
 
-    if i % 200 == 0:
-      with VideoWriter() as vid, torch.no_grad():
-        x = ca.seed(1, 256).to(device)
-        for k in tqdm(range(300), leave=False):
-          step_n = min(2**(k//30), 8)
-          for i in range(step_n):
-            x[:] = ca(x)
-          img = to_rgb(x[0]).permute(1, 2, 0).cpu().detach().numpy()
-          vid.add(zoom(img, 2)) # not here
-          del img
-
-
+#@title NCA video {vertical-output: true}
 with VideoWriter() as vid, torch.no_grad():
-  x = ca.seed(1, 256).to(device)
-  for k in tqdm(range(300), leave=False):
+  x = ca.seed(1, 256)
+  for k in tnrange(300, leave=False):
     step_n = min(2**(k//30), 8)
     for i in range(step_n):
       x[:] = ca(x)
-    img = to_rgb(x[0]).permute(1, 2, 0).cpu().detach().numpy()
-    vid.add(zoom(img, 2)) # not here
-    del img
-
-print('done')
-
-
-# tenslist = []
-# for obj in gc.get_objects():
-#     try:
-#         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-#             tenslist.append(obj)
-#     except:
-#         pass
-# print(len(tenslist))
+    img = to_rgb(x[0]).permute(1, 2, 0).cpu()
+    vid.add(img)
